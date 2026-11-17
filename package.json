@@ -2,6 +2,8 @@
   "name": "modpack-workbench",
   "private": true,
   "version": "1.0.0",
+  "description": "Верстак сборок — подбор модов Forge 1.20.1 и проверка совместимости",
+  "author": "artprotsshchik-svg",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {

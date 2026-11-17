@@ -20,7 +20,7 @@ jobs:
           node-version: 22
 
       - name: Install project dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Typecheck and build web bundle
         run: |
@@ -28,9 +28,11 @@ jobs:
           npm run build
 
       - name: Install Electron & electron-builder
-        run: npm install --no-save electron electron-builder
+        run: npm install --no-save --legacy-peer-deps electron electron-builder
 
       - name: Build Windows .exe (portable + setup)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --win --x64 --config electron-builder.yml --publish never
 
       - name: Upload .exe artifact
