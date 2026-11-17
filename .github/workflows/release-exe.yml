@@ -1,0 +1,46 @@
+name: Build Windows EXE Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install project dependencies
+        run: npm install
+
+      - name: Typecheck and build web bundle
+        run: |
+          npm run lint
+          npm run build
+
+      - name: Install Electron & electron-builder
+        run: npm install --no-save electron electron-builder
+
+      - name: Build Windows .exe (portable + setup)
+        run: npx electron-builder --win --x64 --config electron-builder.yml --publish never
+
+      - name: Upload .exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe-build
+          path: release/*.exe
+
+      - name: Attach .exe files to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.exe
