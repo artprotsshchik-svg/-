@@ -21,6 +21,23 @@
     --accent-hover: #1D4ED8;
     --accent-text: #60A5FA;
 
+    --radius-block: 8px;
+    --radius-control: 6px;
+    --row-py: 0.5rem;
+
+    --active-bar: #3B82F6;
+    --active-tint: rgba(59, 130, 246, 0.16);
+    --inactive-bar: rgba(255, 255, 255, 0.12);
+
+    --status-green-bar: #10B981;
+    --status-green-tint: rgba(16, 185, 129, 0.18);
+    --status-lime-bar: #84CC16;
+    --status-lime-tint: rgba(132, 204, 22, 0.16);
+    --status-yellow-bar: #F59E0B;
+    --status-yellow-tint: rgba(245, 158, 11, 0.22);
+    --status-red-bar: #F43F5E;
+    --status-red-tint: rgba(244, 63, 94, 0.24);
+
     --hl-yellow-bg: rgba(245, 158, 11, 0.14);
     --hl-yellow-hover: rgba(245, 158, 11, 0.22);
     --hl-yellow-border: rgba(251, 191, 36, 0.45);
@@ -63,6 +80,19 @@
     --accent: #1D4ED8;
     --accent-hover: #1E40AF;
     --accent-text: #1D4ED8;
+
+    --active-bar: #2563EB;
+    --active-tint: rgba(37, 99, 235, 0.11);
+    --inactive-bar: rgba(23, 23, 23, 0.14);
+
+    --status-green-bar: #059669;
+    --status-green-tint: rgba(16, 185, 129, 0.15);
+    --status-lime-bar: #65A30D;
+    --status-lime-tint: rgba(132, 204, 22, 0.16);
+    --status-yellow-bar: #D97706;
+    --status-yellow-tint: rgba(245, 158, 11, 0.20);
+    --status-red-bar: #E11D48;
+    --status-red-tint: rgba(244, 63, 94, 0.19);
 
     --hl-yellow-bg: #FFFBEB;
     --hl-yellow-hover: #FEF3C7;
@@ -122,6 +152,112 @@
     scrollbar-width: thin;
     scrollbar-color: var(--border-line) transparent;
   }
+}
+
+/* Configurable Block Styles */
+.ui-block {
+  border-radius: var(--radius-block);
+  background-color: var(--surface-panel);
+  border: 1px solid var(--border-line);
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.ui-control {
+  border-radius: var(--radius-control);
+}
+
+[data-block-style="glass"] .ui-block {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+[data-block-style="flat"] .ui-block {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background-color: var(--surface-solid);
+  border-color: var(--border-soft);
+}
+
+[data-block-style="bordered"] .ui-block {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-width: 1.5px;
+  border-color: var(--border-line);
+}
+
+[data-block-style="elevated"] .ui-block {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 10px 28px -10px rgba(0, 0, 0, 0.42);
+}
+
+[data-theme="light"][data-block-style="elevated"] .ui-block {
+  box-shadow: 0 8px 24px -10px rgba(15, 23, 42, 0.12);
+}
+
+/* Row edge indicator: Left = active/inactive state, Right = mod status */
+.mod-row {
+  padding-top: var(--row-py);
+  padding-bottom: var(--row-py);
+  border-left: 3px solid var(--row-left-bar, transparent);
+  border-right: 3px solid var(--row-right-bar, transparent);
+  background-image: var(--row-edge-grad, none);
+  transition: background-color 120ms ease, filter 120ms ease;
+}
+
+.mod-row:hover {
+  background-color: var(--surface-hover);
+}
+
+.mod-row[data-active="true"] {
+  --row-left-bar: var(--active-bar);
+  --row-left-tint: var(--active-tint);
+}
+
+.mod-row[data-active="false"] {
+  --row-left-bar: var(--inactive-bar);
+  --row-left-tint: transparent;
+}
+
+.mod-row[data-status="green"] {
+  --row-right-bar: var(--status-green-bar);
+  --row-right-tint: var(--status-green-tint);
+}
+
+.mod-row[data-status="lime"] {
+  --row-right-bar: var(--status-lime-bar);
+  --row-right-tint: var(--status-lime-tint);
+}
+
+.mod-row[data-status="yellow"] {
+  --row-right-bar: var(--status-yellow-bar);
+  --row-right-tint: var(--status-yellow-tint);
+}
+
+.mod-row[data-status="red"] {
+  --row-right-bar: var(--status-red-bar);
+  --row-right-tint: var(--status-red-tint);
+}
+
+[data-edge-style="both"] .mod-row,
+:root .mod-row {
+  --row-edge-grad:
+    linear-gradient(to right, var(--row-left-tint, transparent), transparent 24%),
+    linear-gradient(to left, var(--row-right-tint, transparent), transparent 46%);
+}
+
+[data-edge-style="edges"] .mod-row {
+  border-left-width: 4px;
+  border-right-width: 4px;
+  --row-edge-grad: none;
+}
+
+[data-edge-style="soft"] .mod-row {
+  border-left-width: 0px;
+  border-right-width: 0px;
+  --row-edge-grad:
+    linear-gradient(to right, var(--row-left-tint, transparent), transparent 30%),
+    linear-gradient(to left, var(--row-right-tint, transparent), transparent 52%);
 }
 
 @keyframes corner-pulse-a {

@@ -16,12 +16,41 @@ import type {
 } from './modTypes.ts';
 
 export const MOD_BY_ID = new Map<string, ModItem>(MODS_DATABASE.map(m => [m.id, m]));
+export const GROUP_BY_ID = new Map(MOD_GROUPS.map(g => [g.id, g]));
 
 export function normalizeSlug(name: string): string {
   return name
     .toLowerCase()
     .replace(/\([^)]*\)/g, '')
     .replace(/[^a-z0-9]/g, '');
+}
+
+const MOD_SLUG_BY_ID = new Map<string, string>();
+const MOD_BY_SLUG = new Map<string, ModItem>();
+const MOD_BY_LOWER_NAME = new Map<string, ModItem>();
+const SEARCH_INDEX: Array<{
+  mod: ModItem;
+  nameLower: string;
+  slug: string;
+  groupLower: string;
+  tagsLower: string;
+  metaLower: string;
+}> = [];
+
+for (const m of MODS_DATABASE) {
+  const slug = normalizeSlug(m.name);
+  MOD_SLUG_BY_ID.set(m.id, slug);
+  if (slug && !MOD_BY_SLUG.has(slug)) MOD_BY_SLUG.set(slug, m);
+  const nameLower = m.name.toLowerCase();
+  if (!MOD_BY_LOWER_NAME.has(nameLower)) MOD_BY_LOWER_NAME.set(nameLower, m);
+  SEARCH_INDEX.push({
+    mod: m,
+    nameLower,
+    slug,
+    groupLower: `${m.groupTitle || ''} ${m.category}`.toLowerCase(),
+    tagsLower: (m.tags || []).join(' ').toLowerCase(),
+    metaLower: `${m.description} ${m.bestAlternative || ''} ${m.platform}`.toLowerCase(),
+  });
 }
 
 export function isUnsupportedOnForge(mod: ModItem): boolean {
@@ -74,11 +103,61 @@ export const MOD_ALTERNATIVE_DEPENDENCIES: Record<string, string[][]> = {
 };
 
 export function findModByDisplayName(name: string): ModItem | undefined {
-  const target = normalizeSlug(name);
+  const trimmed = name.trim();
+  if (!trimmed) return undefined;
+  const exactLower = MOD_BY_LOWER_NAME.get(trimmed.toLowerCase());
+  if (exactLower) return exactLower;
+  const byId = MOD_BY_ID.get(trimmed.toLowerCase());
+  if (byId) return byId;
+  const target = normalizeSlug(trimmed);
   if (!target) return undefined;
-  const exact = MODS_DATABASE.find(m => normalizeSlug(m.name) === target);
+  const exact = MOD_BY_SLUG.get(target);
   if (exact) return exact;
-  return MODS_DATABASE.find(m => normalizeSlug(m.name).startsWith(target));
+  for (const m of MODS_DATABASE) {
+    const ms = MOD_SLUG_BY_ID.get(m.id) || '';
+    if (ms.startsWith(target)) return m;
+  }
+  return undefined;
+}
+
+const SEARCH_COMBINED = SEARCH_INDEX.map(entry => ({
+  entry,
+  combined: `${entry.nameLower} ${entry.groupLower} ${entry.tagsLower} ${entry.metaLower}`,
+}));
+
+function tokenMatchesText(text: string, token: string): boolean {
+  if (text.includes(token)) return true;
+  if (token.length >= 5 && /^[а-яё-]+$/i.test(token)) {
+    const stem = token.slice(0, Math.max(4, token.length - 2));
+    return text.includes(stem);
+  }
+  return false;
+}
+
+export function searchModsByQuery(query: string, limit = 15): ModItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const scored: Array<{ mod: ModItem; rank: number }> = [];
+
+  for (const { entry, combined } of SEARCH_COMBINED) {
+    if (!tokens.every(t => tokenMatchesText(combined, t))) continue;
+
+    let rank = 0;
+    if (entry.nameLower === q) rank += 2000;
+    else if (entry.nameLower.startsWith(q)) rank += 1200;
+    else if (entry.nameLower.includes(q)) rank += 800;
+    else if (tokens.every(t => tokenMatchesText(entry.nameLower, t))) rank += 650;
+    else if (tokens.every(t => tokenMatchesText(entry.groupLower, t) || tokenMatchesText(entry.tagsLower, t))) rank += 450;
+    else rank += 220;
+
+    if (entry.mod.isGroupLeader) rank += 80;
+    rank += getModEffectivenessScore(entry.mod) * 0.05;
+    scored.push({ mod: entry.mod, rank });
+  }
+
+  scored.sort((a, b) => b.rank - a.rank);
+  return scored.slice(0, limit).map(s => s.mod);
 }
 
 export const FABRIC_TO_FORGE_SWAP: Record<string, string> = {
@@ -257,33 +336,42 @@ export function getTransitiveDependencies(
   return Array.from(result);
 }
 
-export function getExclusivePoolForMod(modId: string): { groupId: string; poolIds: string[] } | null {
-  for (const g of MOD_GROUPS) {
-    if (!g.exclusive) continue;
-    const addonSet = new Set(g.addonIds);
-    const pool = g.memberIds.filter(id => !addonSet.has(id));
-    if (pool.includes(modId)) {
-      return { groupId: g.id, poolIds: pool };
-    }
+const EXCLUSIVE_POOL_BY_MOD_ID = new Map<string, { groupId: string; poolIds: string[] }>();
+for (const g of MOD_GROUPS) {
+  if (!g.exclusive) continue;
+  const addonSet = new Set(g.addonIds);
+  const pool = g.memberIds.filter(id => !addonSet.has(id));
+  const entry = { groupId: g.id, poolIds: pool };
+  for (const id of pool) {
+    EXCLUSIVE_POOL_BY_MOD_ID.set(id, entry);
   }
-  return null;
 }
 
-export function getRuleConflictingIds(modId: string): string[] {
-  const mod = MOD_BY_ID.get(modId);
-  if (!mod) return [];
-  const slug = normalizeSlug(mod.name);
+export function getExclusivePoolForMod(modId: string): { groupId: string; poolIds: string[] } | null {
+  return EXCLUSIVE_POOL_BY_MOD_ID.get(modId) ?? null;
+}
+
+const PRECOMPUTED_RULE_CONFLICT_SETS = new Map<string, Set<string>>();
+const PRECOMPUTED_RULE_CONFLICTS = new Map<string, string[]>();
+const PRECOMPUTED_RULE_META = INCOMPATIBILITY_RULES.map(rule => ({
+  rule,
+  slugSet: new Set(rule.conflictingMods.map(normalizeSlug)),
+  isOptiFine: rule.title.includes('OptiFine'),
+  isNvidiumShader: rule.title.includes('Nvidium и шейдеров'),
+}));
+
+for (const mod of MODS_DATABASE) {
+  const slug = MOD_SLUG_BY_ID.get(mod.id) || '';
   const conflicts = new Set<string>();
 
-  for (const rule of INCOMPATIBILITY_RULES) {
-    const ruleSlugs = rule.conflictingMods.map(normalizeSlug);
-    if (!ruleSlugs.includes(slug)) continue;
+  for (const { slugSet, isOptiFine, isNvidiumShader } of PRECOMPUTED_RULE_META) {
+    if (!slugSet.has(slug)) continue;
 
-    if (rule.title.includes('OptiFine')) {
+    if (isOptiFine) {
       for (const m of MODS_DATABASE) {
-        const ms = normalizeSlug(m.name);
+        const ms = MOD_SLUG_BY_ID.get(m.id) || '';
         if (slug === 'optifine') {
-          if (ms !== 'optifine' && ruleSlugs.includes(ms)) conflicts.add(m.id);
+          if (ms !== 'optifine' && slugSet.has(ms)) conflicts.add(m.id);
         } else if (ms === 'optifine') {
           conflicts.add(m.id);
         }
@@ -291,11 +379,11 @@ export function getRuleConflictingIds(modId: string): string[] {
       continue;
     }
 
-    if (rule.title.includes('Nvidium и шейдеров')) {
+    if (isNvidiumShader) {
       for (const m of MODS_DATABASE) {
-        const ms = normalizeSlug(m.name);
+        const ms = MOD_SLUG_BY_ID.get(m.id) || '';
         if (mod.id === 'nvidium') {
-          if (m.id !== 'nvidium' && ruleSlugs.includes(ms)) conflicts.add(m.id);
+          if (m.id !== 'nvidium' && slugSet.has(ms)) conflicts.add(m.id);
         } else if (m.id === 'nvidium') {
           conflicts.add(m.id);
         }
@@ -304,20 +392,37 @@ export function getRuleConflictingIds(modId: string): string[] {
     }
 
     for (const m of MODS_DATABASE) {
-      if (m.id !== modId && ruleSlugs.includes(normalizeSlug(m.name))) {
+      const ms = MOD_SLUG_BY_ID.get(m.id) || '';
+      if (m.id !== mod.id && slugSet.has(ms)) {
         conflicts.add(m.id);
       }
     }
   }
 
-  const exclusive = getExclusivePoolForMod(modId);
+  const exclusive = EXCLUSIVE_POOL_BY_MOD_ID.get(mod.id);
   if (exclusive) {
     for (const pid of exclusive.poolIds) {
-      if (pid !== modId) conflicts.add(pid);
+      if (pid !== mod.id) conflicts.add(pid);
     }
   }
 
-  return Array.from(conflicts);
+  PRECOMPUTED_RULE_CONFLICT_SETS.set(mod.id, conflicts);
+  PRECOMPUTED_RULE_CONFLICTS.set(mod.id, Array.from(conflicts));
+}
+
+const EMPTY_CONFLICT_ARR: string[] = [];
+
+export function getRuleConflictingIds(modId: string): string[] {
+  return PRECOMPUTED_RULE_CONFLICTS.get(modId) ?? EMPTY_CONFLICT_ARR;
+}
+
+function hasAnyConflictInSet(modId: string, activeSet: Set<string>): boolean {
+  const set = PRECOMPUTED_RULE_CONFLICT_SETS.get(modId);
+  if (!set || set.size === 0) return false;
+  for (const cid of set) {
+    if (activeSet.has(cid)) return true;
+  }
+  return false;
 }
 
 export function analyzeSelection(selectedIds: string[]) {
@@ -326,13 +431,13 @@ export function analyzeSelection(selectedIds: string[]) {
   const conflicts: ConflictDetection[] = [];
   const conflictingIdSet = new Set<string>();
 
-  for (const rule of INCOMPATIBILITY_RULES) {
-    if (rule.title.includes('OptiFine')) {
-      const opti = selectedMods.find(m => normalizeSlug(m.name) === 'optifine');
+  for (const { rule, slugSet, isOptiFine, isNvidiumShader } of PRECOMPUTED_RULE_META) {
+    if (isOptiFine) {
+      const opti = selectedMods.find(m => (MOD_SLUG_BY_ID.get(m.id) || '') === 'optifine');
       if (!opti) continue;
       const others = selectedMods.filter(m => {
-        const n = normalizeSlug(m.name);
-        return n !== 'optifine' && rule.conflictingMods.some(cm => normalizeSlug(cm) === n);
+        const n = MOD_SLUG_BY_ID.get(m.id) || '';
+        return n !== 'optifine' && slugSet.has(n);
       });
       if (others.length > 0) {
         const matched = [opti, ...others];
@@ -346,11 +451,11 @@ export function analyzeSelection(selectedIds: string[]) {
       continue;
     }
 
-    if (rule.title.includes('Nvidium и шейдеров')) {
+    if (isNvidiumShader) {
       const nvid = selectedMods.find(m => m.id === 'nvidium');
       if (!nvid) continue;
       const others = selectedMods.filter(
-        m => m.id !== 'nvidium' && rule.conflictingMods.some(cm => normalizeSlug(cm) === normalizeSlug(m.name))
+        m => m.id !== 'nvidium' && slugSet.has(MOD_SLUG_BY_ID.get(m.id) || '')
       );
       if (others.length > 0) {
         const matched = [nvid, ...others];
@@ -364,9 +469,7 @@ export function analyzeSelection(selectedIds: string[]) {
       continue;
     }
 
-    const matched = selectedMods.filter(sm =>
-      rule.conflictingMods.some(cm => normalizeSlug(cm) === normalizeSlug(sm.name))
-    );
+    const matched = selectedMods.filter(sm => slugSet.has(MOD_SLUG_BY_ID.get(sm.id) || ''));
     if (matched.length > 1) {
       matched.forEach(m => conflictingIdSet.add(m.id));
       conflicts.push({
@@ -604,7 +707,7 @@ export function evaluateAssemblyHealth(selectedIds: string[]) {
   const missingCoreSlots: MissingSlotWarning[] = [];
   if (selectedIds.length > 0) {
     for (const gid of essentialGroupIds) {
-      const grp = MOD_GROUPS.find(g => g.id === gid);
+      const grp = GROUP_BY_ID.get(gid);
       if (!grp) continue;
       const hasAny = grp.memberIds.some(id => selectedSet.has(id));
       if (!hasAny) {
@@ -761,7 +864,7 @@ export function getModSuperseder(
         const bm = MOD_BY_ID.get(id);
         if (!bm || isUnsupportedOnForge(bm)) return false;
         if (prefs && !getRecipeBridgeStatus(bm, activeSet, prefs).compatible) return false;
-        if (getRuleConflictingIds(bm.id).some(cid => activeSet.has(cid))) return false;
+        if (hasAnyConflictInSet(bm.id, activeSet)) return false;
         return true;
       });
       if (viableBest.length > 0) {
@@ -874,7 +977,7 @@ export function isModIncompatibleWithSelection(
     return true;
   }
 
-  if (getRuleConflictingIds(mod.id).some(cid => selectedSet.has(cid))) {
+  if (hasAnyConflictInSet(mod.id, selectedSet)) {
     return true;
   }
 
@@ -883,7 +986,7 @@ export function isModIncompatibleWithSelection(
     deps.some(
       depId =>
         !selectedSet.has(depId) &&
-        getRuleConflictingIds(depId).some(cid => selectedSet.has(cid))
+        hasAnyConflictInSet(depId, selectedSet)
     )
   ) {
     return true;
@@ -919,16 +1022,16 @@ export function shouldHideMod(
 }
 
 export function getGroupMembersByRole(groupId: string) {
-  const group = MOD_GROUPS.find(g => g.id === groupId);
+  const group = GROUP_BY_ID.get(groupId);
   if (!group) return null;
-  const leader = MODS_DATABASE.find(m => m.id === group.leaderId) || null;
+  const leader = MOD_BY_ID.get(group.leaderId) || null;
   const addons = group.addonIds
-    .map(id => MODS_DATABASE.find(m => m.id === id))
+    .map(id => MOD_BY_ID.get(id))
     .filter((m): m is ModItem => Boolean(m));
   const excludedSet = new Set([group.leaderId, ...group.addonIds]);
   const removedAnalogs = group.memberIds
     .filter(id => !excludedSet.has(id))
-    .map(id => MODS_DATABASE.find(m => m.id === id))
+    .map(id => MOD_BY_ID.get(id))
     .filter((m): m is ModItem => Boolean(m));
   return { group, leader, addons, removedAnalogs };
 }

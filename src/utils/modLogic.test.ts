@@ -922,7 +922,56 @@ test('persistence helpers sanitize saved tabs, dates, mod IDs, and builder prefe
   assert.equal(invalidTab?.activeTab, undefined);
 });
 
+test('searchModsByQuery finds mods by Russian purpose and exact names', async () => {
+  const { searchModsByQuery } = await import('./modLogic.ts');
 
+  const light = searchModsByQuery('освещение', 15);
+  assert.ok(light.some(m => m.id === 'solix' || m.id === 'lightstar'), 'Expected lighting mods for "освещение"');
 
+  const memory = searchModsByQuery('память', 15);
+  assert.ok(memory.some(m => m.id === 'ferritecore' || m.id === 'modernfix' || m.id === 'alltheleaks-memory-leak-fix'));
 
+  const leaks = searchModsByQuery('утечки', 15);
+  assert.ok(leaks.some(m => m.id === 'alltheleaks-memory-leak-fix'));
+
+  const chunks = searchModsByQuery('чанки', 15);
+  assert.ok(chunks.length >= 3);
+
+  const particles = searchModsByQuery('частицы', 15);
+  assert.ok(particles.some(m => m.id === 'particle-core' || m.id === 'particull'));
+
+  const exact = searchModsByQuery('Embeddium', 5);
+  assert.equal(exact[0]?.id, 'embeddium');
+
+  const fler = searchModsByQuery('Flerovium', 5);
+  assert.equal(fler[0]?.id, 'flerovium');
+});
+
+test('parseModNamesListText performs round-trip import of plain lists, tree exports, and .jar tokens', async () => {
+  const { parseModNamesListText } = await import('./modLogic.ts');
+
+  for (const preset of MOD_PRESETS) {
+    const plainText = formatModNamesListText(preset.modIds);
+    const parsed = parseModNamesListText(plainText);
+    assert.deepEqual(parsed.unmatchedLines, [], `Unexpected unmatched lines in preset ${preset.id}`);
+    assert.equal(
+      new Set(parsed.matchedIds).size,
+      new Set(preset.modIds).size,
+      `Round-trip mismatch for preset ${preset.id}`
+    );
+  }
+
+  const mixedInput = [
+    '1. Emberbium [обн. 11.2026] — https://www.curseforge.com/minecraft/mc-mods/emberbium',
+    '   ↳ Nvidium (Mesh Shaders, обн. 10.2025) — https://www.curseforge.com/minecraft/mc-mods/nvidium',
+    'ferritecore-6.0.1-forge.jar',
+    'TotallyUnknownCustomModXYZ',
+  ].join('\n');
+
+  const res = parseModNamesListText(mixedInput);
+  assert.ok(res.matchedIds.includes('emberbium'));
+  assert.ok(res.matchedIds.includes('nvidium'));
+  assert.ok(res.matchedIds.includes('ferritecore'));
+  assert.deepEqual(res.unmatchedLines, ['TotallyUnknownCustomModXYZ']);
+});
 

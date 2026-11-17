@@ -1,6 +1,7 @@
 import type { ModItem } from '../data/modsData.ts';
 import { getModUpdatedLabel } from './modDates.ts';
-import { MOD_BY_ID, MOD_HARD_DEPENDENCIES } from './modAnalyzer.ts';
+import { MOD_BY_ID, MOD_HARD_DEPENDENCIES, findModByDisplayName } from './modAnalyzer.ts';
+import { matchJarFilenamesToMods } from './jarMatcher.ts';
 
 export interface AssemblyTreeChild {
   mod: ModItem;
@@ -207,6 +208,7 @@ export function formatAssemblyTreeText(modIds: string[], includeUrls = true): st
   return lines.join('\n');
 }
 
+
 export function formatModNamesListText(modIds: string[]): string {
   const tree = organizeAssemblyTree(modIds);
   const names: string[] = [];
@@ -217,5 +219,65 @@ export function formatModNamesListText(modIds: string[]): string {
     }
   }
   return names.join('\n');
+}
+
+export function parseModNamesListText(rawText: string): {
+  matchedIds: string[];
+  unmatchedLines: string[];
+} {
+  const hasNewlines = /\r?\n/.test(rawText);
+  const rawEntries = hasNewlines ? rawText.split(/\r?\n/) : rawText.split(/[,;]+/);
+
+  const matchedSet = new Set<string>();
+  const unmatchedLines: string[] = [];
+
+  for (const entry of rawEntries) {
+    const original = entry.trim();
+    if (!original) continue;
+
+    // Strip numbering ("1. "), tree arrows ("↳ "), bullets, trailing URLs or [обн. ...] metadata
+    let cleaned = original
+      .replace(/^\d+[.)]\s*/, '')
+      .replace(/^[↳•\-*]+\s*/, '')
+      .replace(/\s+—\s+https?:\/\/\S+$/i, '')
+      .replace(/\s+\[обн\.[^\]]*\]/gi, '')
+      .trim();
+
+    if (!cleaned) continue;
+
+    // 1. Direct match by exact display name / normalized slug
+    let found = findModByDisplayName(cleaned);
+
+    // 2. If it's a tree-exported child line like "Flerovium (Аддон рендера, обн. ...)", strip trailing metadata parens
+    if (!found && /\([^)]*(аддон|зависимость|мост|обн\.|фикс|плагин|forge|fabric|sinytra|vram|fps)/i.test(cleaned)) {
+      const strippedMeta = cleaned.replace(/\s*\([^)]*\)\s*$/, '').trim();
+      if (strippedMeta) {
+        found = findModByDisplayName(strippedMeta);
+      }
+    }
+
+    // 3. Fallback: .jar filename or token match
+    if (!found) {
+      const jarCandidate = cleaned.toLowerCase().endsWith('.jar') ? cleaned : `${cleaned}.jar`;
+      const jarRes = matchJarFilenamesToMods([jarCandidate]);
+      if (jarRes.matchedIds.length > 0) {
+        for (const id of jarRes.matchedIds) {
+          matchedSet.add(id);
+        }
+        continue;
+      }
+    }
+
+    if (found) {
+      matchedSet.add(found.id);
+    } else {
+      unmatchedLines.push(original);
+    }
+  }
+
+  return {
+    matchedIds: Array.from(matchedSet),
+    unmatchedLines,
+  };
 }
 

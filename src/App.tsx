@@ -24,6 +24,7 @@ import { CheckerTab } from './components/CheckerTab.tsx';
 import { AssemblyBuilderTab } from './components/AssemblyBuilderTab.tsx';
 import { CatalogTab } from './components/CatalogTab.tsx';
 import { PresetsTab } from './components/PresetsTab.tsx';
+import { FractalBackground } from './components/FractalBackground.tsx';
 import {
   ThemeConfigurator,
   loadThemeConfig,
@@ -32,33 +33,42 @@ import {
 } from './components/ThemeConfigurator.tsx';
 import { ShieldCheck } from 'lucide-react';
 
-const DEFAULT_CHECKED_MOD_IDS: string[] = [
-  'embeddium',
-  'sodium-chloride',
-  'alloyium',
-  'immediatelyfast',
-  'entity-culling',
-  'more-culling-reforged',
-  'enhanced-block-entities-reloaded',
-  'culllessleaves-reforged',
-  'modernfix',
-  'ferritecore',
-  'alltheleaks-memory-leak-fix',
-  'radium-re-reforged',
-  'badoptimizations',
-  'noisiumed',
-  'ixeris',
-  'smooth-boot-reloaded',
-  'dynamic-fps',
-  'clumps',
-  'packet-fixer',
-  'spark',
-];
-
-const DEFAULT_BUILDER_MOD_IDS: string[] =
+const DEFAULT_ASSEMBLY_MOD_IDS: string[] =
   MOD_PRESETS.find(p => p.id === 'user-alloyium-embeddium')?.modIds ??
-  MOD_PRESETS[0]?.modIds ??
-  DEFAULT_CHECKED_MOD_IDS;
+  MOD_PRESETS[0]?.modIds ?? [
+    'embeddium',
+    'sodium-chloride',
+    'alloyium',
+    'immediatelyfast',
+    'entity-culling',
+    'more-culling-reforged',
+    'enhanced-block-entities-reloaded',
+    'culllessleaves-reforged',
+    'modernfix',
+    'ferritecore',
+    'alltheleaks-memory-leak-fix',
+    'radium-re-reforged',
+    'badoptimizations',
+    'noisiumed',
+    'ixeris',
+    'smooth-boot-reloaded',
+    'dynamic-fps',
+    'clumps',
+    'packet-fixer',
+    'spark',
+  ];
+
+const RADIUS_MAP = {
+  sharp: { block: '2px', control: '2px' },
+  medium: { block: '8px', control: '6px' },
+  soft: { block: '14px', control: '10px' },
+} as const;
+
+const DENSITY_MAP = {
+  compact: '0.35rem',
+  normal: '0.55rem',
+  comfortable: '0.82rem',
+} as const;
 
 export default function App() {
   const initialLocal = useMemo(() => loadLocalAppState(), []);
@@ -69,12 +79,9 @@ export default function App() {
     initialLocal?.activeTab ?? 'assembler'
   );
   const [selectedModDetail, setSelectedModDetail] = useState<ModItem | null>(null);
-  const [checkedModIds, setCheckedModIdsState] = useState<string[]>(
-    initialLocal?.checkedModIds ?? DEFAULT_CHECKED_MOD_IDS
-  );
   const [builderPrefs, setBuilderPrefsState] = useState<AssemblyPreferences>(initialPrefs);
-  const [builderModIds, setBuilderModIdsState] = useState<string[]>(
-    () => initialLocal?.builderModIds ?? [...DEFAULT_BUILDER_MOD_IDS]
+  const [assemblyModIds, setAssemblyModIdsState] = useState<string[]>(
+    () => initialLocal?.builderModIds ?? initialLocal?.checkedModIds ?? [...DEFAULT_ASSEMBLY_MOD_IDS]
   );
   const [dbUpdatedAt, setDbUpdatedAt] = useState<string>(
     initialLocal?.dbUpdatedAt ?? DATABASE_UPDATED_AT
@@ -89,6 +96,14 @@ export default function App() {
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute('data-theme', themeConfig.mode);
+    root.setAttribute('data-block-style', themeConfig.blockStyle);
+    root.setAttribute('data-edge-style', themeConfig.edgeHighlight);
+
+    const radii = RADIUS_MAP[themeConfig.blockRadius];
+    root.style.setProperty('--radius-block', radii.block);
+    root.style.setProperty('--radius-control', radii.control);
+    root.style.setProperty('--row-py', DENSITY_MAP[themeConfig.rowDensity]);
+
     const t = Math.max(0, Math.min(100, themeConfig.panelTransparency)) / 100;
     if (themeConfig.mode === 'dark') {
       const panelAlpha = +(Math.pow(1 - t, 1.15) * 0.96 + 0.02).toFixed(3);
@@ -114,19 +129,14 @@ export default function App() {
     setActiveTabState(next);
   };
 
-  const setCheckedModIds = (action: SetStateAction<string[]>) => {
+  const setAssemblyModIds = (action: SetStateAction<string[]>) => {
     touchSavedDate();
-    setCheckedModIdsState(action);
+    setAssemblyModIdsState(action);
   };
 
   const setBuilderPrefs = (action: SetStateAction<AssemblyPreferences>) => {
     touchSavedDate();
     setBuilderPrefsState(action);
-  };
-
-  const setBuilderModIds = (action: SetStateAction<string[]>) => {
-    touchSavedDate();
-    setBuilderModIdsState(action);
   };
 
   // Hydrate persisted Desktop state & hot DB date on startup
@@ -154,9 +164,9 @@ export default function App() {
         const parsed = parsePersistedState(rawDesktopState);
         if (parsed && !userMutatedRef.current) {
           if (parsed.activeTab) setActiveTabState(parsed.activeTab);
-          if (parsed.checkedModIds) setCheckedModIdsState(parsed.checkedModIds);
+          if (parsed.builderModIds) setAssemblyModIdsState(parsed.builderModIds);
+          else if (parsed.checkedModIds) setAssemblyModIdsState(parsed.checkedModIds);
           if (parsed.builderPrefs) setBuilderPrefsState(parsed.builderPrefs);
-          if (parsed.builderModIds) setBuilderModIdsState(parsed.builderModIds);
           if (parsed.lastSavedDate) setLastSavedDate(parsed.lastSavedDate);
           if (parsed.dbUpdatedAt && !hotUpdatedAt) setDbUpdatedAt(parsed.dbUpdatedAt);
         }
@@ -170,7 +180,7 @@ export default function App() {
     };
   }, []);
 
-  // Persist state & dates on every change
+  // Persist unified assembly state & dates on every change
   useEffect(() => {
     if (!hydratedRef.current) return;
     const snapshot: PersistedAppState = {
@@ -178,36 +188,36 @@ export default function App() {
       dbUpdatedAt,
       lastSavedDate,
       activeTab,
-      checkedModIds,
-      builderModIds,
+      checkedModIds: assemblyModIds,
+      builderModIds: assemblyModIds,
       builderPrefs,
       focusModId: null,
     };
     saveLocalAppState(snapshot);
     void window.desktopAPI?.saveAppState?.(snapshot as unknown as Record<string, unknown>);
-  }, [dbUpdatedAt, lastSavedDate, activeTab, checkedModIds, builderModIds, builderPrefs]);
+  }, [dbUpdatedAt, lastSavedDate, activeTab, assemblyModIds, builderPrefs]);
 
-  const builderSet = useMemo(() => new Set(builderModIds), [builderModIds]);
+  const assemblySet = useMemo(() => new Set(assemblyModIds), [assemblyModIds]);
 
-  const toggleCheckerMod = (id: string) => {
-    setCheckedModIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  const toggleAssemblyMod = (id: string) => {
+    setAssemblyModIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   };
 
   const loadPresetToChecker = (preset: ModPreset) => {
-    setCheckedModIds([...preset.modIds]);
+    setAssemblyModIds([...preset.modIds]);
     setActiveTab('checker');
   };
 
   const loadPresetToBuilder = (preset: ModPreset) => {
-    setBuilderModIds([...preset.modIds]);
+    setAssemblyModIds([...preset.modIds]);
     setActiveTab('assembler');
   };
 
   const navItems: Array<{ id: PersistedTabKey; label: string; count: number }> = [
     { id: 'catalog', label: 'Каталог', count: MODS_DATABASE.length },
-    { id: 'assembler', label: 'Клипание сборок', count: builderModIds.length },
+    { id: 'assembler', label: 'Клипание сборок', count: assemblyModIds.length },
     { id: 'presets', label: 'Сборки', count: MOD_PRESETS.length },
-    { id: 'checker', label: 'Чекер', count: checkedModIds.length },
+    { id: 'checker', label: 'Чекер', count: assemblyModIds.length },
   ];
 
   const angleRad = ((themeConfig.angle + 90) * Math.PI) / 180;
@@ -225,7 +235,7 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen text-[var(--ink-1)] flex flex-col">
-      {/* Subtle Dual-Corner Pulsing Glows fading into base page */}
+      {/* Configurable Fractal + Corner Glow Background */}
       <div
         aria-hidden="true"
         className="fixed inset-0 -z-10 pointer-events-none overflow-hidden bg-[var(--surface-page)]"
@@ -257,9 +267,10 @@ export default function App() {
             }}
           />
         </div>
+        <FractalBackground config={themeConfig} />
       </div>
 
-      {/* Top Navigation & Theme Controls */}
+      {/* Top Navigation & Configurator */}
       <header className="sticky top-0 z-30 bg-[var(--surface-header)] backdrop-blur-md border-b border-[var(--border-line)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-12 md:h-14 flex items-center justify-between gap-3 sm:gap-5">
           <a
@@ -305,10 +316,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab('checker')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-semibold shrink-0 whitespace-nowrap transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 ui-control bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-semibold shrink-0 whitespace-nowrap transition-colors"
             >
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Проверить сборку</span>
+              <span>Чекер</span>
             </button>
           </div>
         </div>
@@ -352,7 +363,7 @@ export default function App() {
               <strong className="text-[var(--accent-text)] font-semibold">{lastSavedDate}</strong>
             </span>
             <span className="hidden sm:inline text-[var(--ink-3)] whitespace-nowrap">
-              Forge 1.20.1 · Nvidium &amp; Alloyium
+              Forge 1.20.1 · Клипание и Чекер синхронизированы
             </span>
           </div>
         </div>
@@ -362,25 +373,21 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5">
         {activeTab === 'catalog' && (
           <CatalogTab
-            checkedModIds={checkedModIds}
-            toggleCheckerMod={toggleCheckerMod}
-            builderSet={builderSet}
+            checkedModIds={assemblyModIds}
+            toggleCheckerMod={toggleAssemblyMod}
+            builderSet={assemblySet}
             builderPrefs={builderPrefs}
-            onOpenDetail={setSelectedModDetail}
+            showDescriptions={themeConfig.showDescriptions}
           />
         )}
 
         {activeTab === 'assembler' && (
           <AssemblyBuilderTab
-            selectedIds={builderModIds}
-            setSelectedIds={setBuilderModIds}
+            selectedIds={assemblyModIds}
+            setSelectedIds={setAssemblyModIds}
             prefs={builderPrefs}
             setPrefs={setBuilderPrefs}
-            onOpenDetail={setSelectedModDetail}
-            onSendToChecker={ids => {
-              setCheckedModIds(ids);
-              setActiveTab('checker');
-            }}
+            showDescriptions={themeConfig.showDescriptions}
           />
         )}
 
@@ -396,8 +403,9 @@ export default function App() {
 
         {activeTab === 'checker' && (
           <CheckerTab
-            checkedModIds={checkedModIds}
-            setCheckedModIds={setCheckedModIds}
+            checkedModIds={assemblyModIds}
+            setCheckedModIds={setAssemblyModIds}
+            showDescriptions={themeConfig.showDescriptions}
             onOpenDetail={setSelectedModDetail}
           />
         )}
@@ -407,15 +415,15 @@ export default function App() {
         mod={selectedModDetail}
         onClose={() => setSelectedModDetail(null)}
         onSelectMod={setSelectedModDetail}
-        checkedModIds={checkedModIds}
-        onToggleCheckMod={toggleCheckerMod}
-        activeModIds={builderModIds}
+        checkedModIds={assemblyModIds}
+        onToggleCheckMod={toggleAssemblyMod}
+        activeModIds={assemblyModIds}
         builderPrefs={builderPrefs}
         onChooseVariantInBuilder={mod => {
-          const alreadySelected = builderModIds.includes(mod.id);
+          const alreadySelected = assemblyModIds.includes(mod.id);
           if (!alreadySelected) {
-            const res = toggleModSmart(builderModIds, mod.id, { strict: true, prefs: builderPrefs });
-            setBuilderModIds(res.nextIds);
+            const res = toggleModSmart(assemblyModIds, mod.id, { strict: true, prefs: builderPrefs });
+            setAssemblyModIds(res.nextIds);
           }
           setSelectedModDetail(null);
           setActiveTab('assembler');
